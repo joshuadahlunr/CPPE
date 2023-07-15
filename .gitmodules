@@ -1,0 +1,3 @@
+[submodule "tree-sitter-cppe"]
+	path = tree-sitter-cppe
+	url = https://github.com/joshuadahlunr/tree-sitter-cppe.git
