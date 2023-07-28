@@ -30,8 +30,10 @@ def determine_if_node_in_expression(node) -> bool:
 	parent = skip_labeled_expression_parents(node)
 	if "init_declarator" in parent.type: return True
 	if "expression" not in parent.type: return False
+	if parent.type == "expression_statement": return False #TODO: Are there any cases where this causes issues?
 	if "compound" in parent.type:
-		return parent.child_by_field_name("return") == node #TODO: make sure this works
+		return parent.child_by_field_name("return") == node\
+			or parent.child_by_field_name("return").type == "labeled_expression" #TODO: make sure this works
 	return True
 
 # Given a node either it returns itself or it returns the node the labeled expression is wrapping!
@@ -86,8 +88,6 @@ with open("tree-sitter-cppe/examples/hello.cppe") as f:
 
 
 
-control_flow_node_types = ["switch_statement", "compound_expression", "if_statement", "for_statement", "for_range_loop", "while_statement", "do_statement", "try_statement", "_possibly_labeled_control_flow_expression"]
-
 def process(node, Type: str | None = None):
 	if Type is None: Type = node.type
 
@@ -97,8 +97,11 @@ def process(node, Type: str | None = None):
 		case "expression_body":
 			out += process_expression_body(node)
 
-		case "switch_statement":
-			out += process_switch(node)
+		case "switch_statement" | "try_statement":
+			out += process_switch_try(node)
+
+		case "case_statement":
+			out += process_switch_case(node)
 
 		case "compound_expression":
 			out += process_compound_expression(node)
@@ -111,16 +114,13 @@ def process(node, Type: str | None = None):
 
 		case "for_range_loop":
 			out += process_range_for(node)
-			
-		case "try_statement":
-			out += process_try(node)
 
 		case "labeled_expression" | "_possibly_labeled_control_flow_expression":
 			out += process_labeled_expression(node)
 
 		case "return_statement":
 			print("return is not yet supported!")
-		
+
 		case "yield_statement":
 			print("yield is not yet supported!")
 
@@ -190,16 +190,31 @@ def process_labeled_expression(node):
 
 		case other: raise RuntimeError("Invalid type of labeled expression: " + child.type)
 
-
-def process_switch(node, label: str | None = None):
+def process_switch_try(node, label: str | None = None):
 	expression = determine_if_node_in_expression(node)
-	print(f"switch discovered {expression}")
-	return ""
+
+	body = node.child_by_field_name("body")
+	out = process_default_node(node) if node.type == "switch_expression" else replace_child_in_output(node, body, process_compound_expression(body, True, label), False)
+	if expression:
+		out = f"[&] {{ {out} }}()"
+	return out
+
+def process_switch_case(node, label: str | None = None):
+	isExpression = determine_if_node_in_expression(node)
+	expression = node.child_by_field_name("expression")
+	if expression is None:
+		return process_default_node(node)
+	
+	return replace_child_in_output(node, expression, f": {process(expression)} break;")
 
 def process_if(node, label: str | None = None):
 	expression = determine_if_node_in_expression(node)
-	print(f"if discovered {expression}")
-	return ""
+
+	consequence = node.child_by_field_name("consequence")
+	out = replace_child_in_output(node, consequence, process_compound_expression(consequence, True, label), False)
+	if expression:
+		out = f"[&] {{ {out} }}()"
+	return out
 
 def process_range_for(node, label: str | None = None):
 	numChildren = len(node.children)
@@ -215,7 +230,7 @@ def process_range_for(node, label: str | None = None):
 			case other: out += process(child)
 		start = child.end_byte
 	out += raw[start:node.end_byte].decode("utf8")
-	
+
 	# Apply all of the replacements we would apply to other types of loops!
 	return process_standard_loop(node, label, out)
 
@@ -241,11 +256,6 @@ def process_standard_loop(node, label: str | None = None, out: str | None = None
 		out = f"[&] {{ {bodyLine} auto __loop_body = {bodyText[0:-2]}; std::vector<decltype(__loop_body())> __out;\n{conditionLine}{extract_ending_indent(bodyText)}{out} return __out; }}()"
 
 	return out
-
-def process_try(node, label: str | None = None):
-	expression = determine_if_node_in_expression(node)
-	print(f"try discovered {expression}")
-	return ""
 
 
 
