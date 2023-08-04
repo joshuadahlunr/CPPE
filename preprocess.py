@@ -28,6 +28,7 @@ def skip_labeled_expression_parents(node):
 # Checks if the given expression node is within an expression
 def determine_if_node_in_expression(node) -> bool:
 	parent = skip_labeled_expression_parents(node)
+	# print(parent.type)
 	if "init_declarator" in parent.type: return True
 	if "expression" not in parent.type: return False
 	if parent.type == "expression_statement": return False #TODO: Are there any cases where this causes issues?
@@ -119,19 +120,24 @@ def process(node, Type: str | None = None):
 			out += process_labeled_expression(node)
 
 		case "return_statement":
-			print("return is not yet supported!")
+			# print("return is not yet supported!")
+			out += process_return_statement(node)
 
 		case "yield_statement":
-			print("yield is not yet supported!")
+			# print("yield is not yet supported!")
+			out += process_yield_statement(node)
 
 		case "defer_statement":
-			raise RuntimeError("defer is not yet supported!")
+			out += process_defer_statement(node)
+			# raise RuntimeError("defer is not yet supported!")
 
 		case "break_statement":
-			print("break is not yet supported!")
+			out += process_break_statement(node)
+			# print("break is not yet supported!")
 
 		case "continue_statement":
-			print("continue is not yet supported!")
+			out += process_continue_statement(node)
+			# print("continue is not yet supported!")
 
 		# By default just print whatever parts of this node are unique and recursively process the children
 		case other:
@@ -155,6 +161,27 @@ def process_expression_body(node):
 
 
 
+def process_return_statement(node):
+	expression = determine_if_node_in_expression(node) #TODO: not working!
+	if not expression: return process_default_node(node)
+	return f"CPPE_RETURN({process(node.children[2])});".replace("(;)", "({})")
+
+def process_yield_statement(node):
+	return process_default_node(node).replace("yield", "return")
+
+def process_break_statement(node):
+	label = node.child_by_field_name("label")
+	if label is None: return process_default_node(node)
+	return f"CPPE_BREAK({process(label)});"
+
+def process_continue_statement(node):
+	label = node.child_by_field_name("label")
+	if label is None: return process_default_node(node)
+	return f"CPPE_CONTINUE({process(label)});"
+
+def process_defer_statement(node):
+	return f"defer {{ {process(node.child_by_field_name('body'))} }};"
+
 def process_compound_expression(node, parent_valid : bool | None = None, label : str | None = None):
 	implicitReturn = node.child_by_field_name('return')
 	out = process_default_node(node)
@@ -166,7 +193,8 @@ def process_compound_expression(node, parent_valid : bool | None = None, label :
 	# 	raise RuntimeError("Compound expressions must (implicitly) return a value!")
 
 	if label is not None:
-		out = rreplace(out, "}", f"CPPE_CONTINUE_BREAK({label}) }}")
+		out = out.replace("{", "{ try {")
+		out = rreplace(out, "}", f"}} CPPE_DEFINE_CONTINUE_BREAK({label}) }}")
 
 	valid_parents = ["function_definition", "lambda_expression"] # List of parents in which we don't need to wrap the code with a lambda!
 	if parent_valid is None: parent_valid = node.parent.type in valid_parents
@@ -245,15 +273,16 @@ def process_standard_loop(node, label: str | None = None, out: str | None = None
 		if body.type == "compound_expression":
 			bodyText = process(body)
 		else: bodyText = f"[&] {{ return {process(body)}; }}()"
-		loopBody = f"{{ __out.emplace_back(__loop_body()); }}"
+		loopBody = f"{{ CPPE_out.emplace_back(CPPE_loop_body()); }}"
 		if label is not None:
-			loopBody = rreplace(loopBody, "}", f"CPPE_CONTINUE_BREAK({label}) }}")
+			loopBody = loopBody.replace("{", "{ try {")
+			loopBody = rreplace(loopBody, "}", f"}} CPPE_DEFINE_CONTINUE_BREAK({label}) }}")
 
 		out = replace_child_in_output(str_or(out, node), body, loopBody)
 		# out = rreplace(out, defaultBody, loopBody)
 		bodyLine = "" #TODO: Implement
 		conditionLine = "" #TODO: Implement
-		out = f"[&] {{ {bodyLine} auto __loop_body = {bodyText[0:-2]}; std::vector<decltype(__loop_body())> __out;\n{conditionLine}{extract_ending_indent(bodyText)}{out} return __out; }}()"
+		out = f"[&] {{ {bodyLine} auto CPPE_loop_body = {bodyText[0:-2]}; std::vector<decltype(CPPE_loop_body())> CPPE_out;\n{conditionLine}{extract_ending_indent(bodyText)}{out} return CPPE_out; }}()"
 
 	return out
 
@@ -262,4 +291,5 @@ def process_standard_loop(node, label: str | None = None, out: str | None = None
 def apply_global_substitutions(processed: str) -> str:
 	return processed.replace(";;", ";").replace("<-", "=")
 
-print(apply_global_substitutions(process(tree.root_node)))
+print("#include </home/joshuadahl/Dev/CPPE/library/CPPE.hpp>\n\n"\
+	+ apply_global_substitutions(process(tree.root_node)))
