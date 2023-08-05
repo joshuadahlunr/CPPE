@@ -16,4 +16,9 @@
 
 #include "control_flow.hpp"
 
+// Enables a more modern function syntax!
+#ifndef fn
+#define fn auto
+#endif
+
 #endif // __CPPE__HPP__
