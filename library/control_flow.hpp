@@ -143,7 +143,7 @@ namespace CPPE {
 
 
 #define CPPE_CONVERT_ARGC_ARGV(argc, argv) std::span(argv, argc) | std::views::transform([](char const* v){ return std::string_view(v); })
-#define CPPE_CONVERT_ARGC_ARGV_TO(argc, argv, name, type) auto CPPE_##name = CPPE_CONVERT_ARGC_ARGV(argc, argv); type name(CPPE_##name.begin(), CPPE_##name.end());
+#define CPPE_CONVERT_ARGC_ARGV_TO(argc, argv, type, name) auto CPPE__##name = CPPE_CONVERT_ARGC_ARGV(argc, argv); type name(CPPE__##name.begin(), CPPE__##name.end());
 
 
 

@@ -27,8 +27,9 @@ with open("tree-sitter-cppe/examples/hello.cppe") as f:
 class NodeState:
 	def __init__(self):
 		self.labeled_depth : int = 0
-		self.function_return = "void" # TODO: Probably want to save the full signature
-		self.node = None
+		# self.function_return = "void" # TODO: Probably want to save the full signature
+		self.current_function = None
+		self.node = None	
 
 	def clone(self):
 		return copy.copy(self)
@@ -45,6 +46,10 @@ class NodeState:
 
 	def __add__(self, node): # Binary +
 		return self.clone_with_node(node)
+
+	def with_function(self, function):
+		self.current_function = function
+		return self
 
 	# Checks if the given expression node is within an expression
 	def in_expression(self, node = None) -> bool:
@@ -72,11 +77,145 @@ class NodeState:
 			else: out = out.replace(defaultChild, replacement, 1)
 		return out
 
+
+class QualifiedIdentifier:
+	def __init__(self, name=""):
+		self.namespace = []
+		self.name = name
+		self.templates = []
+		self.trailing = ""
+
+	def parse(name: str):
+		out = QualifiedIdentifier()
+		out.namespace = name.split("::")
+		out.name = out.namespace[-1]
+		out.namespace.pop(-1)
+		out.templates = out.name.split("<")
+		if len(out.templates) == 1: out.templates = []
+		else:
+			out.name = out.templates[0]
+			out.templates = out.templates[1].split(",")
+			trailing = out.templates[-1].split(">")
+			out.templates[-1] = trailing[0]
+			out.trailing = trailing[1]
+		return out
+
+	def __str__(self):
+		ns = self.namespace[:]
+		ns.append(self.name)
+		ret = "::".join(ns)
+		if len(self.templates) > 0:
+			ret += f"<{','.join(self.templates)}>"
+		return ret + self.trailing
+
+class Function(QualifiedIdentifier):
+	class Parameter:
+		def __init__(self, t="", name="", default=""):
+			self.name = name
+			self.type = t
+			self.default = default
+
+		def parse(state: NodeState):
+			out = Function.Parameter()
+			out.type = process(state + state.node.children[0])
+			out.name = process(state + state.node.children[1])
+			if len(state.node.children) > 2:
+				out.default = process(state + state.node.children[2])
+			return out
+
+		def __str__(self):
+			return self.type + " " + self.name + "" if len(self.default) == 0 else (" = " + self.default)
+
+	def __init__(self):
+		self.parent = None
+		self.toPrint = ""
+		self.toPrintParameters = ""
+		self.name = QualifiedIdentifier()
+		self.return_type = ""
+		self.trailing_return = False
+		self.parameters = []
+		self.originalParameters = None
+
+
+	def parse(state: NodeState):
+		node = state.node
+		body = node.child_by_field_name("body")
+		
+		out = Function()
+		out.parent = state.current_function
+
+		out.return_type = process(state + node.children[-3])
+		declarator = node.children[-2]
+		out.name = QualifiedIdentifier.parse(process(state + declarator.children[0]))
+		parameters = declarator.children[1]
+		out.toPrintParameters = process(state + parameters)
+		out.parameters = [Function.Parameter.parse(state + child) for child in parameters.children[1:-1]]
+
+		trailingReturn = find_in_children(declarator, "trailing_return_type")
+		if trailingReturn is not None:
+			if out.return_type not in ["auto", "fn"]:
+				raise RuntimeError("Trailing return type must follow auto or fn")
+			out.return_type = process(state + trailingReturn.children[-1])
+
+		body = process((state + body).with_function(out))
+		out.toPrint = process_default_node(state.with_function(out)).replace(body, "")
+
+		return out, body
+
+	def parse_lambda(state: NodeState):
+		node = state.node
+		body = node.child_by_field_name("body")
+		
+		out = Function()
+		out.parent = state.current_function
+		out.return_type = "auto"
+		out.name = QualifiedIdentifier()
+
+		declarator = node.children[-2]
+		parameters = declarator.children[1]
+		out.toPrintParameters = process(state + parameters)
+		out.parameters = [Function.Parameter.parse(state + child) for child in parameters.children[1:-1]]
+
+		trailingReturn = find_in_children(declarator, "trailing_return_type")
+		if trailingReturn is not None:
+			if out.return_type not in ["auto", "fn"]:
+				raise RuntimeError("Trailing return type must follow auto or fn")
+			out.return_type = process(state + trailingReturn.children[-1])
+
+		body = process((state + body).with_function(out))
+		out.toPrint = process_default_node(state.with_function(out)).replace(body, "")
+
+		return out, body
+
+	def replace_parameters(self, newParams: list[Parameter]):
+		self.originalParameters = self.parameters
+		self.parameters = newParams
+		newParamsStr = f"({', '.join([str(param) for param in newParams])})"
+		self.toPrint = self.toPrint.replace(self.toPrintParameters, newParamsStr)
+		self.toPrintParameters = newParamsStr
+
+	def replace_return_type(self, newReturn: str):
+		if self.trailing_return:
+			self.toPrint = rreplace(self.toPrint, self.return_type, newReturn, 1)
+		else: self.toPrint = self.toPrint.replace(self.return_type, newReturn, 1)
+		self.return_type = newReturn
+
+	def __str__(self):
+		return self.toPrint
+
+
+
 def process(state: NodeState, Type: str | None = None):
 	if Type is None: Type = state.node.type
 
 	out = ""
 	match Type:
+		case "function_definition" | "inline_method_definition" | "operator_cast_definition": #TODO: Does operator_cast work properly?
+			out += process_function(state)
+
+		case "lambda_expression":
+			out += process_lambda(state)
+
 		case "expression_body":
 			out += process_expression_body(state)
 
@@ -138,6 +277,44 @@ def process_default_node(state: NodeState):
 		start = child.end_byte
 	out += raw[start:node.end_byte].decode("utf8")
 	return out
+
+
+function_signatures = ""
+
+def process_function(state: NodeState):
+	global function_signatures
+	f, body = Function.parse(state)
+
+	if f.name.name == "main"\
+	  and len(f.name.namespace) == 0\
+	  and len(f.parameters) <= 2\
+	  and f.return_type in ["void", "fn", "auto", "int"]:
+		f.replace_return_type("int")
+		if len(f.parameters) == 1 and ("string" in f.parameters[0].type or f.parameters[0].type == "auto"):
+			f.replace_parameters([Function.Parameter("int", "CPPE_argc"), Function.Parameter("const char**", "CPPE_argv")])
+			if f.originalParameters[0].type == "auto": f.originalParameters[0].type = "std::vector<std::string_view>"
+			body = body.replace("{", f"{{ CPPE_CONVERT_ARGC_ARGV_TO(CPPE_argc, CPPE_argv, {f.originalParameters[0].type}, {f.originalParameters[0].name})", 1)	
+
+	if "CPPE_RETURN" in body:
+		body = body.replace("{", f"{{ CPPE_DEFINE_PROPIGATOR_START(<{f.name}>, {f.return_type}, nullptr, 0)", 1)
+		body = rreplace(body, "}", f"CPPE_DEFINE_PROPIGATOR_END(<{f.name}>, {f.return_type}) }}")
+	else: body = body.replace("&CPPE_propigate_0", "nullptr")
+
+	#TODO: Do we want to do anything with turning nested functions into lambdas?
+
+	function_signatures += f.toPrint + ";\n"
+	return f.toPrint + body
+
+def process_lambda(state: NodeState):
+	f, body = Function.parse_lambda(state)
+	print(f.name)
+
+	if "CPPE_RETURN" in body:
+		body = body.replace("{", f"{{ CPPE_DEFINE_PROPIGATOR_START(<{f.name}>, {f.return_type}, nullptr, 0)", 1)
+		body = rreplace(body, "}", f"CPPE_DEFINE_PROPIGATOR_END(<{f.name}>, {f.return_type}) }}")
+	else: body = body.replace("&CPPE_propigate_0", "nullptr")
+
+	return f.toPrint + body
 
 def process_expression_body(state: NodeState):
 	return f"{{ return {process(state + state.node.children[1])}; }}" # We know the expression is always the second child!
@@ -244,9 +421,9 @@ def process_switch_case(state: NodeState, label: str | None = None):
 	expression = node.child_by_field_name("expression")
 	if expression is None:
 		return process_default_node(state + node)
-	
+
 	return state.replace_child_in_output(node, expression, f": {process(state + expression)} break;")
-	
+
 def process_catch_clause(state: NodeState, label: str | None = None):
 	body = state.node.child_by_field_name("body")
 	return state.replace_child_in_output(state.node, body, process_compound_expression(state + body, True, label))
@@ -300,12 +477,12 @@ def process_standard_loop(state: NodeState, label: str | None = None, out: str |
 		if label is not None:
 			if not bodyText.strip().startswith("{"):
 				replacement = "{ " + replacement + " }"
-			replacement = replacement.replace("{", f"{{ CPPE_DEFINE_LOOP_PROPIGATOR_AND_HELPER_START({label}, {state.function_return}, &CPPE_propigate_{state.labeled_depth - 1}, {state.labeled_depth});", 1)
-			replacement = rreplace(replacement, "}", f"CPPE_DEFINE_LOOP_PROPIGATOR_END({label}, {state.function_return}); }}", 1)
-		
+			replacement = replacement.replace("{", f"{{ CPPE_DEFINE_LOOP_PROPIGATOR_AND_HELPER_START({label}, {state.current_function.return_type}, &CPPE_propigate_{state.labeled_depth - 1}, {state.labeled_depth});", 1)
+			replacement = rreplace(replacement, "}", f"CPPE_DEFINE_LOOP_PROPIGATOR_END({label}, {state.current_function.return_type}); }}", 1)
+
 		out = state.replace_child_in_output(str_or(out, node), bodyText, replacement)
 		# TODO: Why do inner labels disappear?
-		
+
 
 	else:
 		if body.type == "compound_expression":
@@ -318,7 +495,7 @@ def process_standard_loop(state: NodeState, label: str | None = None, out: str |
 			loopBody = rreplace(loopBody, "}", f"CPPE_DEFINE_LOOP_PROPIGATOR_END({label}, void) }};")
 
 		out = state.replace_child_in_output(str_or(out, node), body, loopBody)
-		
+
 		bodyLine = " " #TODO: Implement
 		if label is not None: bodyLine = f"CPPE_DEFINE_LOOP_HELPER_PROPIGATOR({state.labeled_depth})" + bodyLine
 		conditionLine = "" #TODO: Implement
@@ -331,5 +508,8 @@ def process_standard_loop(state: NodeState, label: str | None = None, out: str |
 def apply_global_substitutions(processed: str) -> str:
 	return processed.replace(";;", ";").replace("<-", "=")
 
+
+implementation = process(NodeState().with_node(tree.root_node))
 print("#include </home/joshuadahl/Dev/CPPE/library/CPPE.hpp>\n\n"\
-	+ apply_global_substitutions(process(NodeState().with_node(tree.root_node))))
+	+ f"// Function Signatures\n\n{function_signatures}\n"\
+	+"// Implementation\n\n\n" + apply_global_substitutions(implementation))
