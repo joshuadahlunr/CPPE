@@ -2,6 +2,23 @@ from tree_sitter import Language, Parser
 from helpers import *
 import ast
 import copy
+import argparse, os
+
+parser = argparse.ArgumentParser(
+                    prog='CPPE Preprocessor',
+                    description='Converts CPPE files into C++ files')
+parser.add_argument("filename")
+parser.add_argument("-o", "--output", required=False)					
+parser.add_argument("-l", "--library", default=os.path.join(os.path.dirname(__file__), "library", "CPPE.hpp"))
+parser.add_argument("-p", "--print", action='store_true')
+args = parser.parse_args()
+library = os.path.abspath(args.library)
+if "CPPE.hpp" not in library: library = os.path.join(library, "CPPE.hpp")
+filedir = os.path.dirname(os.path.abspath(args.filename))
+filename = os.path.basename(args.filename)
+target = args.output
+if target is None and not args.print: target = os.path.join(filedir, filename.replace(".cppe", ".cpp").replace(".hppe", ".hpp"))
+
 
 Language.build_library(
 	# Store the library in the `build` directory
@@ -15,12 +32,14 @@ Language.build_library(
 
 language = Language('build/cppe.so', 'cppe')
 
+prototypes = []
+
 parser = Parser()
 parser.set_language(language)
 
 tree = None
 raw = None
-with open("tree-sitter-cppe/examples/hello.cppe") as f:
+with open(args.filename) as f:
 	raw = f.read().encode("utf8")
 	tree = parser.parse(raw)
 
@@ -85,19 +104,18 @@ class QualifiedIdentifier:
 		self.templates = []
 		self.trailing = ""
 
-	def parse(name: str):
-		out = QualifiedIdentifier()
-		out.namespace = name.split("::")
-		out.name = out.namespace[-1]
-		out.namespace.pop(-1)
-		out.templates = out.name.split("<")
-		if len(out.templates) == 1: out.templates = []
-		else:
-			out.name = out.templates[0]
-			out.templates = out.templates[1].split(",")
-			trailing = out.templates[-1].split(">")
-			out.templates[-1] = trailing[0]
-			out.trailing = trailing[1]
+	@classmethod
+	def parse(cls, name: str):
+		out = cls()
+		parts = name.split("::")
+		out.namespace = parts[:-1]
+		out.name = parts[-1]
+
+		if "<" in out.name:
+			out.name, templates_trailing = out.name.split("<", 1)
+			templates, out.trailing = templates_trailing.split(">", 1)
+			out.templates = templates.split(",")
+
 		return out
 
 	def __str__(self):
@@ -115,8 +133,9 @@ class Function(QualifiedIdentifier):
 			self.type = t
 			self.default = default
 
-		def parse(state: NodeState):
-			out = Function.Parameter()
+		@classmethod
+		def parse(cls, state: NodeState):
+			out = cls()
 			out.type = process(state + state.node.children[0])
 			out.name = process(state + state.node.children[1])
 			if len(state.node.children) > 2:
@@ -136,12 +155,12 @@ class Function(QualifiedIdentifier):
 		self.parameters = []
 		self.originalParameters = None
 
-
-	def parse(state: NodeState):
+	@classmethod
+	def parse(cls, state: NodeState):
 		node = state.node
 		body = node.child_by_field_name("body")
 		
-		out = Function()
+		out = cls()
 		out.parent = state.current_function
 
 		out.return_type = process(state + node.children[-3])
@@ -162,11 +181,12 @@ class Function(QualifiedIdentifier):
 
 		return out, body
 
-	def parse_lambda(state: NodeState):
+	@classmethod
+	def parse_lambda(cls, state: NodeState):
 		node = state.node
 		body = node.child_by_field_name("body")
 		
-		out = Function()
+		out = cls()
 		out.parent = state.current_function
 		out.return_type = "auto"
 		out.name = QualifiedIdentifier()
@@ -278,11 +298,7 @@ def process_default_node(state: NodeState):
 	out += raw[start:node.end_byte].decode("utf8")
 	return out
 
-
-function_signatures = ""
-
 def process_function(state: NodeState):
-	global function_signatures
 	f, body = Function.parse(state)
 
 	if f.name.name == "main"\
@@ -302,7 +318,7 @@ def process_function(state: NodeState):
 
 	#TODO: Do we want to do anything with turning nested functions into lambdas?
 
-	function_signatures += f.toPrint + ";\n"
+	prototypes.append(f.toPrint + ";")
 	return f.toPrint + body
 
 def process_lambda(state: NodeState):
@@ -510,6 +526,11 @@ def apply_global_substitutions(processed: str) -> str:
 
 
 implementation = process(NodeState().with_node(tree.root_node))
-print("#include </home/joshuadahl/Dev/CPPE/library/CPPE.hpp>\n\n"\
-	+ f"// Function Signatures\n\n{function_signatures}\n"\
-	+"// Implementation\n\n\n" + apply_global_substitutions(implementation))
+result = f"#include <{library}>\n\n"\
+	+ f"// Prototypes\n\n" + '\n'.join(set(prototypes)) + "\n\n"\
+	+"// Implementation\n\n\n" + apply_global_substitutions(implementation)
+
+if target is not None:
+	with open(target, "w") as f:
+		f.write(result)
+if args.print: print(result)
