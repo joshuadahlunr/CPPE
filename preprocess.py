@@ -236,6 +236,9 @@ def process(state: NodeState, Type: str | None = None):
 		case "sum_type":
 			out += process_sum_type(state)
 
+		case "array_type":
+			out += process_array_type(state)
+
 		case "function_definition" | "inline_method_definition" | "operator_cast_definition": #TODO: Does operator_cast work properly?
 			out += process_function(state)
 
@@ -312,6 +315,36 @@ def process_product_type(state: NodeState):
 
 def process_sum_type(state: NodeState):
 	return "::CPPE::sum_t<" + process_default_node(state).replace("|", ",") + ">" # TODO: Are there any other cases where there would be a | in a type?
+
+def process_array_type(state: NodeState):
+	state.array_type = getattr(state, "array_type", None)
+	node = state.node
+	size = process(state + state.node.children[2])
+
+	underlyingType = "std::span" if size.strip() == ']' else ("std::vector" if size.strip() == '...' else "std::array")
+	wrapperType = None
+
+	out = ""
+	start = node.start_byte
+	for i, child in enumerate(node.children):
+		out += raw[start:child.start_byte].decode("utf8")
+		match i:
+			case 0:
+				type = process(state.with_node(child)) # NOTE: that we are passing the state by reference here since we need data to propigate back up!
+				out += underlyingType + "<" + (state.array_type if state.array_type else type)
+				wrapperType = type if state.array_type else None
+			case 1: out += process(state + child).replace("[", ", " if underlyingType == "std::array" else "")
+			case 2: out += size.replace(']', '>').replace("...", "")
+			case _: out += process(state + child).replace("]", ">")
+		start = child.end_byte
+	out += raw[start:node.end_byte].decode("utf8")
+
+	if wrapperType is not None:
+		out = wrapperType.replace(state.array_type, out)
+
+	if node.children[0].type != "array_type":
+		state.array_type = process(state + node.children[0])
+	return out
 
 
 

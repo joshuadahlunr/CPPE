@@ -58,7 +58,7 @@ namespace CPPE {
             CONTINUE,
             BREAK,
             EXCEPTION
-        };
+        } type;
     };
 
     template<typename R>
