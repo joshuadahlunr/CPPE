@@ -59,3 +59,9 @@ def find_all_in_children(node, targetTypes: list[str] | str):
 		queue.extend(queue[0].children)
 		queue.pop(0)
 	return found
+
+# Wraps the output into a lambda if it is not a compound expression (which already wraps into a lambda)!
+def wrap_if_not_compound(out: str, type: str, ret = False):
+	if type == "compound_expression":
+		return out
+	return f"[&] {{ {'return' if ret else ''}{out} }}()"

@@ -230,6 +230,12 @@ def process(state: NodeState, Type: str | None = None):
 
 	out = ""
 	match Type:
+		case "product_type":
+			out += process_product_type(state)
+
+		case "sum_type":
+			out += process_sum_type(state)
+
 		case "function_definition" | "inline_method_definition" | "operator_cast_definition": #TODO: Does operator_cast work properly?
 			out += process_function(state)
 
@@ -298,6 +304,18 @@ def process_default_node(state: NodeState):
 	out += raw[start:node.end_byte].decode("utf8")
 	return out
 
+
+
+
+def process_product_type(state: NodeState):
+	return "::CPPE::product_t" + process_default_node(state)
+
+def process_sum_type(state: NodeState):
+	return "::CPPE::sum_t<" + process_default_node(state).replace("|", ",") + ">" # TODO: Are there any other cases where there would be a | in a type?
+
+
+
+
 def process_function(state: NodeState):
 	f, body = Function.parse(state)
 
@@ -323,7 +341,7 @@ def process_function(state: NodeState):
 
 def process_lambda(state: NodeState):
 	f, body = Function.parse_lambda(state)
-	print(f.name)
+	# print(f.name)
 
 	if "CPPE_RETURN" in body:
 		body = body.replace("{", f"{{ CPPE_DEFINE_PROPIGATOR_START(<{f.name}>, {f.return_type}, nullptr, 0)", 1)
@@ -428,7 +446,7 @@ def process_switch_try(state: NodeState, label: str | None = None):
 	body = node.child_by_field_name("body")
 	out = process_default_node(state + node) if node.type == "switch_expression" else state.replace_child_in_output(node, body, process_compound_expression(state + body, True, label), False)
 	if expression:
-		out = f"[&] {{ {out} }}()"
+		out = wrap_if_not_compound(out, node.type)# f"[&] {{ {out} }}()"
 	return out
 
 def process_switch_case(state: NodeState, label: str | None = None):
@@ -449,9 +467,29 @@ def process_if(state: NodeState, label: str | None = None):
 	expression = state.in_expression()
 
 	consequence = node.child_by_field_name("consequence")
-	out = state.replace_child_in_output(node, consequence, process_compound_expression(state + consequence, True, label), False)
-	if expression:
-		out = f"[&] {{ {out} }}()"
+	alternative = node.child_by_field_name("alternative")
+
+	if alternative is None:
+		out = state.replace_child_in_output(node, consequence, process_compound_expression(state + consequence, True, label), False)
+		if expression:
+			out = wrap_if_not_compound(out, node.type)
+	elif not expression:
+		out = state.replace_child_in_output(node, consequence, process_compound_expression(state + consequence, True, label), False)
+
+	# If we have an alternative and are in an expression... we need to calculate sum types!
+	elif expression:
+		consequenceTxt = process(state + consequence)
+		alternativeTxt = process(state + alternative)
+		consequenceBody = f"auto consequence = {wrap_if_not_compound(consequenceTxt, consequence.type)[:-2]};" #TODO: Get line
+		alternativeBody = f"auto alternative = {wrap_if_not_compound(alternativeTxt, alternative.type)[:-2]};" #TODO: Get line
+
+		# TODO: How will we extract indentation for this?
+		out = f"[&] {{ {consequenceBody}\n{alternativeBody}\nusing sum_t = ::CPPE::sum_t<decltype(consequence()), decltype(alternative())>;\n"
+		out += process_default_node(state)\
+			.replace(consequenceTxt, "return CPPE_PROMOTE(sum_t, consequence());", 1)
+		out = rreplace(out, alternativeTxt, "return CPPE_PROMOTE(sum_t, alternative());", 1)
+		out += " }()"
+
 	return out
 
 def process_range_for(state: NodeState, label: str | None = None):
@@ -503,7 +541,8 @@ def process_standard_loop(state: NodeState, label: str | None = None, out: str |
 	else:
 		if body.type == "compound_expression":
 			bodyText = process(state + body)
-		else: bodyText = f"[&] {{ return {process(state + body)}; }}()"
+		# else: bodyText = f"[&] {{ return {process(state + body)}; }}()"
+		else: bodyText = wrap_if_not_compound(process(state + body), body.type, True)
 		loopBody = f"{{ CPPE_out.emplace_back(CPPE_loop_body()); }}"
 		if label is not None:
 			loopBody = loopBody.replace("{", f"{{ CPPE_DEFINE_LOOP_PROPIGATOR_START({label}, void, &CPPE_propigate_helper_{state.labeled_depth - 1}, {state.labeled_depth});")\

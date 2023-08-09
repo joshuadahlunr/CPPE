@@ -15,6 +15,7 @@
 #endif
 
 #include "control_flow.hpp"
+#include "product_sum.hpp"
 
 // Enables a more modern function syntax!
 #ifndef fn
