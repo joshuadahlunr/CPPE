@@ -503,9 +503,15 @@ def process_if(state: NodeState, label: str | None = None):
 	alternative = node.child_by_field_name("alternative")
 
 	if alternative is None:
-		out = state.replace_child_in_output(node, consequence, process_compound_expression(state + consequence, True, label), False)
 		if expression:
-			out = wrap_if_not_compound(out, node.type)
+			consequenceTxt = process(state + consequence)
+			consequenceBody = f"auto consequence = {wrap_if_not_compound(consequenceTxt, consequence.type)[:-2]};" #TODO: Get line
+
+			out = f"[&] {{ {consequenceBody}\nusing sum_t = std::optional<decltype(consequence())>;\n"
+			out += process_default_node(state)\
+				.replace(consequenceTxt, "return sum_t(consequence());", 1)
+			out += " return sum_t{}; }()"
+		else: out = state.replace_child_in_output(node, consequence, process_compound_expression(state + consequence, True, label), False)
 	elif not expression:
 		out = state.replace_child_in_output(node, consequence, process_compound_expression(state + consequence, True, label), False)
 
