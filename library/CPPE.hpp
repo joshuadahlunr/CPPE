@@ -16,6 +16,7 @@
 
 #include "control_flow.hpp"
 #include "product_sum.hpp"
+#include "ufcs.hpp"
 
 // Enables a more modern function syntax!
 #ifndef fn

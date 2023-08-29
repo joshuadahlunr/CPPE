@@ -78,8 +78,9 @@ class NodeState:
 		if "expression" not in parent.type: return False
 		if parent.type == "expression_statement": return False #TODO: Are there any cases where this causes issues?
 		if "compound" in parent.type:
-			return parent.child_by_field_name("return") == node\
-				or parent.child_by_field_name("return").type in ["labeled_expression", "possibly_labeled_control_flow_expression"] #TODO: make sure this works
+			ret = parent.child_by_field_name("return")
+			return ret == node\
+				or (ret is not None and ret.type in ["labeled_expression", "possibly_labeled_control_flow_expression"]) #TODO: make sure this works
 		return True
 
 	# Replace all of the text for the given child with the given replacement
@@ -289,6 +290,12 @@ def process(state: NodeState, Type: str | None = None):
 
 		case "continue_statement":
 			out += process_continue_statement(state)
+
+		case "call_expression":
+			out += process_call_expression(state)
+
+		case "field_expression":
+			out += process_field_expression(state)
 
 		# By default just print whatever parts of this node are unique and recursively process the children
 		case other:
@@ -597,6 +604,48 @@ def process_standard_loop(state: NodeState, label: str | None = None, out: str |
 
 	return out
 
+
+def UFCS_macro(node, property = True, onPointer = False):
+	out = "CPPE_UFCS" 
+	match node.type:
+		case "template_method" | "dependent_name": out = "CPPE_UFCS_TEMPLATE"
+		case "qualified_name": out = "CPPE_UFCS_QUALIFIED"
+	if onPointer: out += "_POINTER"
+	return out + ('_PROPERTY' if property else '_FUNCTION')
+
+def process_call_expression(state: NodeState):
+	node = state.node
+	if node.children[1].type == "noufcs":
+		return process_default_node(state).replace(process(state + node.children[1]), "", 1)
+
+	function = node.child_by_field_name("function")
+	arguments = node.child_by_field_name("arguments")
+	argument1 = None
+	onPointer = False
+	if function.type == "field_expression":
+		if function.children[2].type == "noufcs":
+			return process_default_node(state).replace(process(state + function.children[2]), "", 1)
+		argument1 = function.child_by_field_name("argument")
+		onPointer = "->" in process(state + function.children[1])
+		function = function.child_by_field_name("field")
+
+	arguments = process(state + arguments)
+	if argument1 is not None:
+		arguments = arguments.replace("(", process(state + argument1) + ", ", 1).replace(", )", ")") #TODO: Need a regex to better match the no original arguments case...
+	else: arguments = arguments.replace("(", "", 1)
+	argCount = len(arguments.split(","))
+	
+	return f"{UFCS_macro(function, argCount == 1, onPointer)}({process(state + function)}, {arguments}"
+
+def process_field_expression(state: NodeState):
+	node = state.node
+	if node.children[2].type == "noufcs":
+		return process_default_node(state).replace(process(state + node.children[2]), "")
+	
+	argument = node.child_by_field_name("argument")
+	onPointer = "->" in process(state + node.children[1])
+	function = node.child_by_field_name("field")
+	return f"{UFCS_macro(function, True, onPointer)}({process(state + function)}, {process(state + argument)})"
 
 
 def apply_global_substitutions(processed: str) -> str:
