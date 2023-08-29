@@ -439,7 +439,7 @@ def process_compound_expression(state: NodeState, parent_valid : bool | None = N
 	if parent_valid is None: parent_valid = node.parent.type in valid_parents
 	if parent_valid:
 		return out
-	return "[&] " + out + "()"
+	return "[&] ALWAYS_INLINE_LAMBDA " + out + "()"
 
 def process_labeled_statement(state: NodeState):
 	node = state.node
@@ -486,7 +486,7 @@ def process_switch_try(state: NodeState, label: str | None = None):
 	body = node.child_by_field_name("body")
 	out = process_default_node(state + node) if node.type == "switch_expression" else state.replace_child_in_output(node, body, process_compound_expression(state + body, True, label), False)
 	if expression:
-		out = wrap_if_not_compound(out, node.type)# f"[&] {{ {out} }}()"
+		out = wrap_if_not_compound(out, node.type)
 	return out
 
 def process_switch_case(state: NodeState, label: str | None = None):
@@ -514,7 +514,7 @@ def process_if(state: NodeState, label: str | None = None):
 			consequenceTxt = process(state + consequence)
 			consequenceBody = f"auto consequence = {wrap_if_not_compound(consequenceTxt, consequence.type)[:-2]};" #TODO: Get line
 
-			out = f"[&] {{ {consequenceBody}\nusing sum_t = std::optional<decltype(consequence())>;\n"
+			out = f"[&] ALWAYS_INLINE_LAMBDA {{ {consequenceBody}\nusing sum_t = std::optional<decltype(consequence())>;\n"
 			out += process_default_node(state)\
 				.replace(consequenceTxt, "return sum_t(consequence());", 1)
 			out += " return sum_t{}; }()"
@@ -530,7 +530,7 @@ def process_if(state: NodeState, label: str | None = None):
 		alternativeBody = f"auto alternative = {wrap_if_not_compound(alternativeTxt, alternative.type)[:-2]};" #TODO: Get line
 
 		# TODO: How will we extract indentation for this?
-		out = f"[&] {{ {consequenceBody}\n{alternativeBody}\nusing sum_t = ::CPPE::sum_t<decltype(consequence()), decltype(alternative())>;\n"
+		out = f"[&] ALWAYS_INLINE_LAMBDA {{ {consequenceBody}\n{alternativeBody}\nusing sum_t = ::CPPE::sum_t<decltype(consequence()), decltype(alternative())>;\n"
 		out += process_default_node(state)\
 			.replace(consequenceTxt, "return CPPE_PROMOTE(sum_t, consequence());", 1)
 		out = rreplace(out, alternativeTxt, "return CPPE_PROMOTE(sum_t, alternative());", 1)
@@ -587,7 +587,6 @@ def process_standard_loop(state: NodeState, label: str | None = None, out: str |
 	else:
 		if body.type == "compound_expression":
 			bodyText = process(state + body)
-		# else: bodyText = f"[&] {{ return {process(state + body)}; }}()"
 		else: bodyText = wrap_if_not_compound(process(state + body), body.type, True)
 		loopBody = f"{{ CPPE_out.emplace_back(CPPE_loop_body()); }}"
 		if label is not None:
@@ -600,7 +599,7 @@ def process_standard_loop(state: NodeState, label: str | None = None, out: str |
 		bodyLine = " " #TODO: Implement
 		if label is not None: bodyLine = f"CPPE_DEFINE_LOOP_HELPER_PROPIGATOR({state.labeled_depth})" + bodyLine
 		conditionLine = "" #TODO: Implement
-		out = f"[&] {{ {bodyLine} auto CPPE_loop_body = {bodyText[0:-2]}; std::vector<decltype(CPPE_loop_body())> CPPE_out;\n{conditionLine}{extract_ending_indent(bodyText)}{out} return CPPE_out; }}()"
+		out = f"[&] ALWAYS_INLINE_LAMBDA {{ {bodyLine} auto CPPE_loop_body = {bodyText[0:-2]}; std::vector<decltype(CPPE_loop_body())> CPPE_out;\n{conditionLine}{extract_ending_indent(bodyText)}{out} return CPPE_out; }}()"
 
 	return out
 

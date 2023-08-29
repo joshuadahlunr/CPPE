@@ -49,6 +49,6 @@ namespace detail {
 }
 #define DEFER_1(LINE) zz_defer##LINE
 #define DEFER_2(LINE) DEFER_1(LINE)
-#define DEFER_3 auto DEFER_2(__LINE__) = ::detail::___defer_dummy___{} << [&]()
+#define DEFER_3 auto DEFER_2(__LINE__) = ::detail::___defer_dummy___{} << [&]() ALWAYS_INLINE_LAMBDA
 #define defer DEFER_3
 #endif // defer

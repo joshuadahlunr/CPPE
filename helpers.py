@@ -64,4 +64,4 @@ def find_all_in_children(node, targetTypes: list[str] | str):
 def wrap_if_not_compound(out: str, type: str, ret = False):
 	if type == "compound_expression":
 		return out
-	return f"[&] {{ {'return' if ret else ''}{out} }}()"
+	return f"[&] ALWAYS_INLINE_LAMBDA {{ {'return' if ret else ''}{out} }}()"
